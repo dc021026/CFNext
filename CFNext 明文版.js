@@ -531,16 +531,17 @@ const DEFAULT_CONFIG = {
   nodeLimit: true,      // 节点数量控制：默认开启，按 nodeLimitCount 精确限制节点总数
   nodeLimitCount: 500,  // 开启节点数量控制后，最多下发的节点数（默认 500）
   polling: false,       // 轮询机制：开启后每次更新订阅轮询下发新节点（KV issued 去重 + 数量限制），关闭后忽略轮询与限制、下发全部节点
-  probeAlive: true,     // ★ 节点测活（TCP 探测）总开关：默认开启——恢复 2.0 第四版原版「下发前剔除死节点」策略，
-                        //   实测节点「活」的比例高、客户端体感更快；并发已限 ≤4（probeAll 信号量），不再有 250 socket 排队假死。
+  probeAlive: false,    // ★ 节点测活（TCP 探测）总开关：默认关闭（推荐，对齐 V1.0.6）——订阅不做任何 TCP 握手/HTTP 探测与剔除，
+                        //   按数据源原始顺序全量下发、客户端自行择优（秒回，v2rayNG/AsteriskNG 刷新正常）；面板开启或 PROBE_ALIVE=1 强制开启。
                         //   节点形态：所有模式统一按 1.0.6 机制——端口原样单端口下发（固定 443、不随机 TLS 端口、不追加明文端口变体）。
                         //   关闭：所有测活函数直接放行，不做任何 TCP 握手/HTTP 探测与剔除——节点的下发策略、出入站方式、
                         //   ProxyIP 等节点相关均按 V1.x 处理：按数据源原始顺序（bestcf 地区池行序 = 质量序）全量下发，客户端自行择优；
                         //   开启：对候选地址做 TCP 握手/HTTP 探测并剔除判死项，
                         //   含精选池/优选 IP/域名预检/ProxyIP 兜底各环节的测活剔除（自定义订阅 / 随机优选模式除外：不进行测活）。
                         //   注意：Cloudflare 运行时禁止出站连接 CF IP 段（官方文档：Outbound TCP sockets to
-                        //   Cloudflare IP ranges are blocked），因此对 CF 段 IP 的探测恒失败 → 精选池会被整体判死、
-                        //   订阅被迫用随机 CF IP 补足（客户端可达率仅 28-45%，而精选池实测 97%）。可用环境变量 PROBE_ALIVE=0 覆盖关闭
+                        //   Cloudflare IP ranges are blocked），因此对 CF 段 IP 跳过 TCP 探测、直接视为可用——
+                        //   精选池（实测 97% 可用）不会被误判清空，仅对非 CF 段（反代/ProxyIP）真实测活剔除死节点。
+                        //   可用环境变量 PROBE_ALIVE=0 覆盖关闭
   // 配额安全（账户监控）：填写 CF 账户 ID 与 API 令牌后，面板可查询当日用量并按需自动收缩节点上限
   cfAccountId: '',      // CF 账户监控：账户 ID（Account Tag），留空则监控关闭；可用环境变量 CF_ACCOUNT_ID 覆盖
   cfApiToken: '',       // CF 账户监控：API 令牌（需 Workers 用量分析读取权限），可用环境变量 CF_API_TOKEN 覆盖
@@ -2059,18 +2060,16 @@ async function handleXhttpProxy(request, cfg) {
 // 优选器：候选提取（txt / HTML 多源）+ TCP 延迟测试
 // ---------------------------------------------------------------------------
 // 从任意数据源文本提取 IP 候选（兼容 txt 行式、HTML 表格、JSON 文本；仅保留合法 IPv4/IPv6）
-// 内容解码：优先 UTF-8（无 U+FFFD 判定），否则按 GBK 解码（对齐 edgetunnel 请求优选API 的编码检测；
+// 内容解码：优先 UTF-8（fatal 严格解码），否则按 GBK 解码（对齐 edgetunnel 请求优选API 的编码检测；
 // 国内优选 API 常返回 GB2312/GBK 编码，直接 text() 会乱码导致解析不到 IP）
+// 重要：不使用 U+FFFD 替换符字符串字面量判定（该转义会被部分混淆器改写为空格，导致 UTF-8 源被误判 GBK 而乱码），
+// 改用 TextDecoder('utf-8', { fatal: true }) 严格解码：非法字节直接抛错才落入 GBK 兜底，混淆后行为不变
 function decodeUtf8OrGbk(buf) {
   const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
   try {
-    const utf8 = new TextDecoder('utf-8').decode(bytes);
-    // 修复：以 U+FFFD（替换符）判定有效 UTF-8，而非「不含空格」。
-    // 原判定导致 bestcf 等含空格行式的 UTF-8 源被误判为 GBK，UTF-8 中文被 GBK 解码成乱码
-    // （如 香港 → 棣欐腐、美国 → 缇庡浗）；GBK 源按 UTF-8 解码必产生替换符，判定依旧准确
-    if (!utf8.includes('\uFFFD')) return utf8;
-  } catch (e) { /* 继续尝试 GBK */ }
-  try { return new TextDecoder('gbk').decode(bytes); } catch (e) { /* 兜底 */ }
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch (e) { /* 非 UTF-8（GB2312/GBK 等）→ 尝试 GBK */ }
+  try { return new TextDecoder('gbk').decode(bytes); } catch (e2) { /* 兜底 */ }
   return new TextDecoder().decode(bytes);
 }
 
@@ -2251,6 +2250,13 @@ function xhttpPadding(cfg) {
   };
 }
 
+// vless/trojan 分享链接 # 后的节点名：非 ASCII（中文等）原样输出、不做 URL 编码，仅转义 URI 特殊字符（% # ? 空格）。
+// 原因：v2rayNG/AsteriskNG 对 fragment 的 %XX 按系统编码（GBK）做 URL 解码，UTF-8 编码的中文（%E9%A6...）会被误读成乱码
+// （如 香港 → 棣欐腐、台湾 → 鋆版咕）；原样中文走明文 UTF-8，GBK/UTF-8 解码客户端均正常显示。
+function uriFragName(name) {
+  return String(name).replace(/%/g, '%25').replace(/#/g, '%23').replace(/\?/g, '%3F').replace(/ /g, '%20');
+}
+
 function vlessNode(cfg, server, port, name, extra = {}) {
   const host = cfg.host;
   const addr = server.includes(':') && !server.startsWith('[') ? `[${server}]` : server;  // IPv6 需方括号
@@ -2273,7 +2279,7 @@ function vlessNode(cfg, server, port, name, extra = {}) {
     // ECH：输出 "查询域名+DoH"（xray/V2rayN 客户端本地查询 ECH 配置，Worker 端拉取会与用户边缘密钥不匹配导致握手失败）
     q += '&ech=' + enc((cfg.echHost || 'cloudflare-ech.com') + '+' + (cfg.echDns || 'https://223.5.5.5/dns-query'));
   }
-  return `vless://${cfg.uuid}@${addr}:${port}?${q}#${encodeURIComponent(name)}`;
+  return `vless://${cfg.uuid}@${addr}:${port}?${q}#${uriFragName(name)}`;
 }
 
 function trojanNode(cfg, server, port, name) {
@@ -2288,7 +2294,7 @@ function trojanNode(cfg, server, port, name) {
     : 'security=none&host=' + enc(host) + '&type=ws&path=' + enc('/' + cfg.path);
   if (cfg.alpn && isTls) q += '&alpn=' + enc(cfg.alpn);
   if (cfg.ech && isTls) q += '&ech=' + enc((cfg.echHost || 'cloudflare-ech.com') + '+' + (cfg.echDns || 'https://223.5.5.5/dns-query'));   // ECH：仅 TLS 端口有效
-  return `trojan://${cfg.trojanPassword || cfg.uuid}@${addr}:${port}?${q}#${encodeURIComponent(name)}`;
+  return `trojan://${cfg.trojanPassword || cfg.uuid}@${addr}:${port}?${q}#${uriFragName(name)}`;
 }
 
 // 优选域名 / 优选 API 的 DNS 解析缓存（TTL 10 分钟：域名或 URL → IP 列表）
@@ -3183,6 +3189,9 @@ async function probeAll(items, fn) {
 // ProxyIP 可用性检测：TCP 连通测试（参考 TunnelBoard 测活思路，独立实现），2 秒超时
 async function testProxyAlive(server, port, timeoutMs) {
   if (!PROBE_ALIVE_ENABLED) return true;   // 测活关闭：不剔除
+  // Cloudflare 运行时禁止出站连接 CF IP 段：对 CF 段 IP 的 TCP 探测恒失败，跳过探测视为可用，
+  // 避免精选池（实测 97% 可用）被整体判死清空、订阅被迫用随机 CF IP 补足（客户端可达率仅 28-45%）
+  if (isCloudflareIP(server)) return true;
   const ms = timeoutMs || 2000;
   try {
     const conn = connect({ hostname: server, port: port });
@@ -3991,7 +4000,7 @@ pre.code{background:var(--bg2);border:1px solid var(--border);border-radius:8px;
         <div class="card">
           <h3><span class="tick"></span>节点测活</h3>
           <div class="proto-row"><label class="switch"><input type="checkbox" id="q-probe-on"><span class="sl"></span></label><span>节点测活（TCP 探测）</span></div>
-          <p class="hint" style="margin-top:12px">关闭：不做任何 TCP 握手 / HTTP 探测与剔除，节点的下发策略、出入站方式、ProxyIP 等节点相关均按 V1.x版本处理方式处理——按数据源原始顺序全量下发，客户端自行择优。<br>开启：对候选地址做 TCP 探测并剔除判死项（含精选池 / 优选 IP / 域名预检 / ProxyIP 兜底），但 Cloudflare 运行时禁止出站连接 CF IP 段，对 CF 段 IP 的探测恒判死，内置精选池（实测 97% 可用）会被整体清空，订阅只能用随机 CF IP 补足，自定义订阅 / 随机优选模式不测活。</p>
+          <p class="hint" style="margin-top:12px">关闭：不做任何 TCP 握手 / HTTP 探测与剔除，节点的下发策略、出入站方式、ProxyIP 等节点相关均按 V1.x版本处理方式处理——按数据源原始顺序全量下发，客户端自行择优。<br>开启：对候选地址做 TCP 探测并剔除判死项（含精选池 / 优选 IP / 域名预检 / ProxyIP 兜底）；Cloudflare 运行时禁止出站连接 CF IP 段，故对 CF 段 IP 跳过探测、直接视为可用（内置精选池实测 97% 可用，不会被误判清空），仅对非 CF 段（反代 / ProxyIP）真实测活剔除死节点。自定义订阅 / 随机优选模式不测活。</p>
         </div>
       </div>
       <div class="card">
