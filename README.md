@@ -1,18 +1,89 @@
 # CFNext 订阅管理器
 
-> 部署在 Cloudflare Workers / Pages 的代理订阅管理面板，单文件同时实现 VLESS / Trojan / XHTTP 多协议代理与图形化配置：`/UUID`（或自定义路径）进入面板，`/sub` 输出订阅；内置节点优选器、节点数量控制、轮询下发、ECH 加密、落地与出站代理及地区 / 运营商 / IP 版本多维筛选，并新增 **WARP / MASQUE / 家宽** 三种节点模式与**前后端分离**部署形态。部署即用，绑定 KV 后改完即生效。
+> 部署在 Cloudflare Workers / Pages 的代理订阅管理面板，单文件同时实现 VLESS / Trojan / XHTTP 多协议代理与图形化配置：`/UUID`（或自定义路径）进入面板，`/sub` 输出订阅；内置节点优选器、节点数量控制、轮询下发、ECH 加密、落地与出站代理及地区 / 运营商 / IP 版本多维筛选，并新增 **MASQUE / 家宽** 三种节点模式与**前后端分离**部署形态。部署即用，绑定 KV 后改完即生效。
 >
 > **[✈ Telegram 交流群](https://t.me/SZ_PAI)**
 > **[📺️ YouTube 频道](https://www.youtube.com/@PAI_CN)**
 > **[▶️ 3.0 新版本部署教程](https://www.youtube.com/watch?v=CQ8zvWXkZzA)**
 > **[▶️ 2.0 Worker模式视频使用教程](https://youtu.be/1GCZgdGFsk0)**
->
+> 
 # 注意：明文版代码仅作为开源使用，不建议进行线上部署
+> 
+> ## [✈️ 四年超稳定老牌机场](https://www.beupisp.com/register?code=5vnEa9vV)
+> ## [✈️ 备用超高性价比机场](https://103.73.220.147:8888/#/register?code=luC4csRk)
 
 <details>
   <summary>✨点击展开更新日志</summary>
 
 ## 版本号更新说明：大版本更新改动版本号第1位数字，小功能更新改动为第2位数字，小BUG修复改动为第3位数字。如当前版本：2.8.1 则为本项目第2个大版本，新增功能第8个版本，修复1个版本的BUG；
+
+---
+# 更新日志_V3.0.3
+
+### ✨ 新增功能
+- 运行模式统一调整为 **Worker、MASQUE、家宽** 三种模式，完整移除 WARP 模式及相关配置、注册、凭据、端点和节点生成逻辑。
+- 分离版 Worker 后端新增数据面令牌桶限流，并阻止访问回环、私网、链路本地、云元数据地址及常见邮件滥用端口。
+- 分离版 Worker 后端改为必须配置 `API` 或 `GATE`；未配置或鉴权失败时返回伪装页，不再开放控制面和数据面。
+
+## 🐛 BUG 处理
+- 修复家宽模式在 Clash Verge 中仍下发 Worker 节点、未正确切换为 OpenVPN 家宽节点的问题。
+- 修复 MASQUE 模式因未设置隐藏变量 `MASQUE_AUTO=1`，导致凭据无法生成、订阅只剩 `DIRECT` 的问题。
+
+---
+
+# 更新日志_V3.0.2
+
+### ✨ 新增功能
+- 前后端分离版新增多后端负载均衡；Clash/Karing 使用 `round-robin`，sing-box 使用 `urltest` 自动测活。
+- 默认订阅地址改为 `域名/后端UUID/sub`，不再使用变量 `L`；UUID 修改并保存后，面板订阅链接立即同步变化。
+- 自定义订阅别名限定为 3–64 位大小写字母或数字，例如 `AAZ`、`aaz`、`A1z`。
+- 修改自定义订阅别名后，旧地址立即失效；旧地址返回伪装页，不再下发节点数据。
+- 通过公共 DoH 解析代理域名，去重后最多并发尝试 6 个地址。
+- 反代顺序调整为：目标直连 → 自定义 `PROXYIP` → 内置地区出口。
+- `only` 模式改为严格模式：SOCKS5 失败即连接失败，不再隐式回退。
+- 新增 `OUTBOUND_MODE` / `SMODE` 环境变量，用于设置出站模式。
+- 新增可选 `CONFIG_KEY`，支持使用 AES-256-GCM 加密 KV 配置。
+- 新增面板 `bootstrap` 接口，一次返回配置、运行状态和额度信息。
+- 新增低可观测性 Wrangler 配置示例，可关闭逐请求 Invocation logs 并保留异常日志。
+
+## 🐛 BUG 处理
+- 修复 API 密钥可以绕过订阅路径校验的问题。
+- 修复自定义订阅地址无法正常获取节点的问题。
+- 修复自定义优选节点配合自定义反代时无法正确失败转移的问题。
+- 修复前端 Pages 域名污染后端 KV、节点 `Host` 和 TLS SNI 的问题。
+- 修复优选节点错误使用前端域名，导致节点全部 `-1` 的问题。
+- 消除出站拨号函数中的 TDZ 变量遮蔽问题。
+- 修复 SOCKS5 用户名和密码认证无法完整生效的问题。
+- 修复 SOCKS5 凭据包含 URL 编码字符或多个 `@` 时解析错误的问题。
+- 修复代理域名只连接单个解析地址，单个入口故障导致全部节点失效的问题。
+- 修复 `S` / `OUTBOUND` 环境变量可能被旧 KV 配置覆盖的问题。
+- 修复单文件版订阅链接下载按钮点击无反应的问题。
+- 修复前后端分离版订阅下载、复制和自定义地址映射异常的问题。
+- 修复项目根地址自动跳转到变量 `L` 页面并暴露登录入口的问题。
+- 修复设置管理密码页面错误显示“Console CFNext 控制台”的问题，统一显示为“CFNext 控制台”。
+- 修复多订阅同时启用后只合并节点、没有真正进行跨后端负载均衡的问题。
+- 修复错误 `CONFIG_KEY` 可能导致配置读取异常的问题；现在返回受控错误且不会覆盖原密文。
+- 修复旧订阅别名修改后仍可继续获取节点的问题。
+
+## ⚡ 优化调整
+- 前后端分离版前端调整为纯控制面，不再转发 WebSocket 和代理数据流。
+- 客户端节点直接连接后端 Worker 或后端自定义域名，减少双倍请求和额外延迟。
+- 面板初始化由 `status`、`config`、`quota` 三次请求合并为一次 `bootstrap` 请求。
+- 单文件版面板初始化 invocation 从 3 次降低到 1 次；分离版前后端合计从约 6 次降低到 2 次。
+- 规则、优选源及运行期缓存迁移到 Cache API，减少非核心 KV 读写。
+- 移除服务端 TCP 批量测速、VPN Gate 自动拉取和测活、定时自动优选及 GitHub 在线源码更新。
+- Clash 本地控制密钥改为根据 UUID 稳定派生，并支持使用 `CLASH_SECRET` 覆盖。
+- 订阅下载改用已认证 API、`Blob` 和浏览器原生下载，完成后自动释放临时对象 URL。
+- 源码保持零 `console.*`，减少业务代码产生的可观测事件。
+
+---
+# 更新日志_V3.0.1
+## 🐛 BUG 处理
+- 修复通过自定义订阅地址下发节点无法获取节点报错的问题；
+- 修复订阅链接后方的下载按钮点击后无法下载配置文件的问题
+- 修复前端域名污染 KV、优选节点 Host/SNI 错误。
+- 修复先直连目标网站，失败后再尝试落地反代，补齐连接失败、超时、无响应断开时的回退。复用[cmliu/edgetunnel](https://github.com/cmliu/edgetunnel)的代码
+- 清除无用代码，未调用的旧连接函数 qt()、validUrl()，被 !1 永久禁用的分支，以及未使用的变量。
 ---
 # 更新日志_V3.0.0
 
@@ -340,26 +411,26 @@ Proxy-HK.SenflareLink.Kdns.fr,Proxy-TW.SenflareLink.Kdns.fr,Proxy-JP.SenflareLin
 
 | 项    | 内容                                                                                              |
 | ---- | ----------------------------------------------------------------------------------------------- |
-| 当前版本 | `3.0.0`                                                                                         |
+| 当前版本 | `3.0.3`                                                                                         |
 | 部署平台 | Cloudflare **Workers** / **Pages**                                                              |
-| 协议   | VLESS / Trojan / XHTTP / WARP（WireGuard）/ MASQUE / OpenVPN（家宽）                                  |
+| 协议   | VLESS / Trojan / XHTTP / MASQUE / OpenVPN（家宽）                                  |
 | 订阅格式 | Clash（mihomo / Verge）、sing-box、Karing、v2rayN等                                                   |
 | 存储   | Cloudflare KV（绑定变量名统一为 `K`）                                                                     |
-| 客户端  | Worker模式三协议支持/理论支持所有客户端，WARP/MASQUE模式支持Clash Meta 系内核的客户端（Clash Verge / Mihomo Party / Stash 等） |
+| 客户端  | Worker模式三协议支持/理论支持所有客户端，MASQUE模式支持Clash Meta 系内核的客户端（Clash Verge / Mihomo Party / Stash 等） |
 
 ## 二、主要功能
 
 | #  | 功能               | 说明                                  |
 | -- | ---------------- | ----------------------------------- |
 | 1  | 图形化面板            | `/自定义路径` 进入，玻璃拟态，深 / 浅双主题           |
-| 2  | 四运行模式            | Worker / WARP / MASQUE / 家宽，一键切换    |
+| 2  | 四运行模式            | Worker / MASQUE / 家宽，一键切换    |
 | 3  | 节点优选             | 内置优选源，地区 / 运营商 / IP 版本多维筛选          |
 | 4  | 节点数量控制           | `nodeLimitCount` 默认 300，可调          |
 | 5  | 轮询下发             | `preferredIPs` 多 IP 轮换，均衡负载         |
 | 6  | ECH 加密           | SNI 隐蔽，抗 SNI 阻断                     |
 | 7  | 落地与出站代理          | `PROXYIP` / 出站代理 / 反代落地             |
-| 8  | 前置节点             | `warpFront` 链式拨号（仅 WARP，`clash` 格式） |
-| 9  | WARP / MASQUE 凭据 | 自动注册、自动续用，无需手动填                     |
+| 8  | 前置节点             | `warpFront` 链式拨号 |
+| 9  | MASQUE 凭据 | 自动注册、自动续用，无需手动填                     |
 | 10 | 多后端管理            | 前后端分离版专属：多后端聚合 / 选择下发               |
 | 11 | 反滥用加固            | 指纹消隐、限流、反扫描兜底页、字节差异化                |
 | 12 | Telegram 用量通知    | 每日用量推送（可选）                          |
@@ -425,11 +496,10 @@ Proxy-HK.SenflareLink.Kdns.fr,Proxy-TW.SenflareLink.Kdns.fr,Proxy-JP.SenflareLin
 | ----- | -- | ------------------------------------ |
 | `API` | 密钥 | 后端共享密钥（前端注入 `X-CF-Api` 时校验）。**后端必填** |
 
-### 5.3 WARP / MASQUE（可选）
+### 5.3 MASQUE
 
 | 变量                 | 值          | 说明                                 |
 | ------------------ | ---------- | ---------------------------------- |
-| `WARP_ENDPOINTS`   | `IP:端口` 列表 | 覆盖 WARP 对端候选（默认内置 100 条，只下发前 50）   |
 | `MASQUE_ENDPOINTS` | `IP:端口` 列表 | 覆盖 MASQUE 端点                       |
 | `MASQUE_SNI`       | 域名         | MASQUE SNI（默认 `www.microsoft.com`） |
 
@@ -437,9 +507,7 @@ Proxy-HK.SenflareLink.Kdns.fr,Proxy-TW.SenflareLink.Kdns.fr,Proxy-JP.SenflareLin
 
 | 配置项                  | 说明                                 |
 | -------------------- | ---------------------------------- |
-| `mode`               | 运行模式：worker / warp / masque / home |
-| `warpFront`          | 前置节点链接（仅 clash 格式生效）               |
-| `warpEps`            | WARP 对端候选（一行一个 `IP:端口`，最多 50 个）    |
+| `mode`               | 运行模式：worker / masque / home |
 | `masqueEps`          | MASQUE 端点（一行一个，按顺序尝试）              |
 | `nodeLimitCount`     | 节点数量上限（默认 300）                     |
 | `preferredIPs`       | 优选 IP（可带国家码 / 端口 / 标签）             |
@@ -454,7 +522,6 @@ Proxy-HK.SenflareLink.Kdns.fr,Proxy-TW.SenflareLink.Kdns.fr,Proxy-JP.SenflareLin
 | 模式       | 说明                                            |
 | -------- | --------------------------------------------- |
 | `worker` | 下发 VLESS/Trojan/XHTTP 节点（默认 300 个）            |
-| `warp`   | 下发 WireGuard 节点（默认 50 个官方 anycast 接入点，可配前置节点） |
 | `masque` | 下发 MASQUE 节点（28 个端点，走 QUIC/UDP-443）           |
 | `home`   | 下发家宽节点（VPN Gate OpenVPN + 自定义证书）              |
 
@@ -467,7 +534,7 @@ Proxy-HK.SenflareLink.Kdns.fr,Proxy-TW.SenflareLink.Kdns.fr,Proxy-JP.SenflareLin
 
 ### 6.3 地区与命名
 
-节点名含地区标签（如 `CFNext-WARP·1`），`preferredIPs` 支持国家码前缀、端口、`#标签` 后缀与多源逗号分隔。
+节点名含地区标签（如 `CFNext-·1`），`preferredIPs` 支持国家码前缀、端口、`#标签` 后缀与多源逗号分隔。
 
 ## 七、性能优化与安全
 
@@ -482,5 +549,5 @@ Proxy-HK.SenflareLink.Kdns.fr,Proxy-TW.SenflareLink.Kdns.fr,Proxy-JP.SenflareLin
 
 - 感谢 [cmliu/edgetunnel](https://github.com/cmliu/edgetunnel) 等 Cloudflare Worker 代理项目。
 - 感谢 [byJoey/CFnew](https://github.com/byJoey/cfnewl) 。
-- 感谢 mihomo / sing-box 社区与 WARP / MASQUE 协议的公开实现。
+- 感谢 mihomo / sing-box 社区与 MASQUE 协议的公开实现。
 - 感谢 Telegram 交流群与各位用户的反馈。
